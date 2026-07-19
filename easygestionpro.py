@@ -639,7 +639,20 @@ def gestion_rendezvous():
         with st.form("add_rdv"):
             client_nom = st.text_input("Nom du client *")
             date_rdv = st.date_input("Date", value=date.today())
-            heure_rdv = st.time_input("Heure", value=datetime.now().time())
+            
+            # 🔄 Arrondi à la demi‑heure
+            now = datetime.now()
+            minute = now.minute
+            if minute < 15:
+                minute = 0
+            elif minute < 45:
+                minute = 30
+            else:
+                minute = 0
+                now = now.replace(hour=now.hour + 1)
+            default_time = now.replace(minute=minute, second=0, microsecond=0).time()
+            heure_rdv = st.time_input("Heure", value=default_time)
+            
             send_email_rdv = st.checkbox("Envoyer un email de rappel au client (si email connu)")
             submitted = st.form_submit_button("Ajouter")
             if submitted:
@@ -708,7 +721,6 @@ def gestion_rendezvous():
                         st.toast(f"Rendez-vous de {rdv.client_nom} supprimé", icon="🗑️")
                         st.rerun()
     session.close()
-
 # ============================================================
 # GESTION DES FACTURES (fonction vide pour éviter erreur)
 # ============================================================
