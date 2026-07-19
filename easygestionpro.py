@@ -371,105 +371,223 @@ def dashboard():
             st.plotly_chart(fig2, use_container_width=True)
 
     session.close()
-
+#changer code #########################################
 def gestion_clients():
     apply_theme()
     st.title("👥 Clients")
     ent_id = st.session_state.entreprise_id
     session = get_session()
 
-    # --- Import Excel ---
-    with st.expander("📂 Importer des clients depuis Excel", expanded=False):
-        uploaded_file = st.file_uploader("Choisir un fichier Excel (.xlsx)", type=["xlsx"])
-        if uploaded_file is not None:
-            df_import = pd.read_excel(uploaded_file)
-            # Colonnes attendues: Nom, Téléphone, Email
-            required_cols = ["Nom", "Téléphone", "Email"]
-            if all(col in df_import.columns for col in required_cols):
-                with st.spinner("Importation en cours..."):
-                    for _, row in df_import.iterrows():
-                        client = Client(
-                            entreprise_id=ent_id,
-                            nom=row["Nom"],
-                            telephone=row["Téléphone"],
-                            email=row["Email"]
-                        )
-                        session.add(client)
-                    session.commit()
-                    st.success(f"✅ {len(df_import)} clients importés avec succès !")
-                    st.rerun()
-            else:
-                st.error(f"Le fichier doit contenir les colonnes : {', '.join(required_cols)}")
+    # ============================================================
+    # 📥 TÉLÉCHARGER UN MODÈLE (CSV et Excel)
+    # ============================================================
+    with st.expander("📥 Télécharger un modèle de fichier", expanded=False):
+        st.markdown("""
+        **Téléchargez le modèle qui vous convient :**  
+        - **CSV** : ouvrable avec n'importe quel éditeur ou tableur (LibreOffice, Excel).  
+        - **Excel** : format classique.
+        """)
+        
+        col1, col2 = st.columns(2)
+        
+        # Modèle CSV
+        with col1:
+            csv_data = "Nom,Téléphone,Email\nDupont Jean,0612345678,jean.dupont@email.com\nMartin Sophie,0623456789,sophie.martin@email.com\nBernard Pierre,0634567890,pierre.bernard@email.com"
+            st.download_button(
+                label="📥 Télécharger le modèle (CSV)",
+                data=csv_data,
+                file_name="clients_exemple.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        
+        # Modèle Excel
+        with col2:
+            df_modele = pd.DataFrame({
+                "Nom": ["Dupont Jean", "Martin Sophie", "Bernard Pierre"],
+                "Téléphone": ["0612345678", "0623456789", "0634567890"],
+                "Email": ["jean.dupont@email.com", "sophie.martin@email.com", "pierre.bernard@email.com"]
+            })
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df_modele.to_excel(writer, index=False, sheet_name="Clients")
+            st.download_button(
+                label="📥 Télécharger le modèle (Excel)",
+                data=output.getvalue(),
+                file_name="clients_exemple.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
 
-    # --- Ajout client (inchangé) ---
-    with st.expander("➕ Ajouter un client", expanded=False):
+    # ============================================================
+    # 📂 IMPORTER DES CLIENTS (CSV, Excel, ODS)
+    # ============================================================
+    with st.expander("📂 Importer des clients depuis un fichier", expanded=False):
+        st.markdown("""
+        **Formats acceptés :** `.csv`, `.xlsx`, `.ods`  
+        **Colonnes obligatoires :** `Nom`, `Téléphone`, `Email`  
+        """)
+        
+        uploaded_file = st.file_uploader(
+            "Choisissez votre fichier",
+            type=["csv", "xlsx", "ods"],
+            key="import_clients"
+        )
+        
+        if uploaded_file is not None:
+            # Détection automatique du format
+            try:
+                extension = uploaded_file.name.split('.')[-1].lower()
+                
+                if extension == "csv":
+                    # Essayer différents séparateurs
+                    try:
+                        df_import = pd.read_csv(uploaded_file, encoding='utf-8', sep=',')
+                    except:
+                        uploaded_file.seek(0)
+                        df_import = pd.read_csv(uploaded_file, encoding='utf-8', sep=';')
+                elif extension == "ods":
+                    df_import = pd.read_excel(uploaded_file, engine='odf')
+                else:  # xlsx
+                    df_import = pd.read_excel(uploaded_file, engine='openpyxl')
+                
+                st.write("**Aperçu des données :**")
+                st.dataframe(df_import.head(10))
+                
+                # Nettoyer les noms de colonnes (enlever espaces)
+                df_import.columns = df_import.columns.str.strip()
+                
+                # Vérifier les colonnes requises
+                required_cols = ["Nom", "Téléphone", "Email"]
+                if all(col in df_import.columns for col in required_cols):
+                    if st.button("✅ Importer ces clients", use_container_width=True):
+                        with st.spinner("Importation en cours..."):
+                            count = 0
+                            for _, row in df_import.iterrows():
+                                # Nettoyer les valeurs
+                                nom = str(row["Nom"]).strip()
+                                telephone = str(row["Téléphone"]).strip()
+                                email = str(row["Email"]).strip()
+                                if nom and nom != "nan":
+                                    # Vérifier doublon
+                                    existant = session.query(Client).filter_by(
+                                        entreprise_id=ent_id,
+                                        nom=nom,
+                                        telephone=telephone
+                                    ).first()
+                                    if not existant:
+                                        client = Client(
+                                            entreprise_id=ent_id,
+                                            nom=nom,
+                                            telephone=telephone if telephone != "nan" else None,
+                                            email=email if email != "nan" else None
+                                        )
+                                        session.add(client)
+                                        count += 1
+                            session.commit()
+                            st.success(f"✅ {count} clients importés avec succès !")
+                            st.toast(f"{count} clients ajoutés 🎉", icon="✅")
+                            st.rerun()
+                else:
+                    st.error(f"❌ Colonnes manquantes. Le fichier doit contenir : {', '.join(required_cols)}")
+                    st.info(f"Colonnes trouvées : {list(df_import.columns)}")
+            except Exception as e:
+                st.error(f"❌ Erreur de lecture : {e}")
+                st.info("Vérifiez que votre fichier est bien formaté (séparateur virgule ou point-virgule pour CSV).")
+
+    # ============================================================
+    # ➕ AJOUTER UN CLIENT (manuel)
+    # ============================================================
+    with st.expander("➕ Ajouter un client (manuel)", expanded=False):
         with st.form("add_client"):
             nom = st.text_input("Nom *")
             tel = st.text_input("Téléphone")
             email = st.text_input("Email")
-            submitted = st.form_submit_button("Ajouter")
+            submitted = st.form_submit_button("Ajouter", use_container_width=True)
             if submitted:
                 if not nom:
                     st.error("Le nom est requis.")
                 else:
-                    client = Client(entreprise_id=ent_id, nom=nom, telephone=tel, email=email)
-                    session.add(client)
-                    session.commit()
-                    st.toast("✅ Client ajouté", icon="✅")
-                    st.rerun()
+                    existant = session.query(Client).filter_by(
+                        entreprise_id=ent_id,
+                        nom=nom,
+                        telephone=tel
+                    ).first()
+                    if existant:
+                        st.warning("⚠️ Ce client existe déjà.")
+                    else:
+                        client = Client(entreprise_id=ent_id, nom=nom, telephone=tel, email=email)
+                        session.add(client)
+                        session.commit()
+                        st.toast("✅ Client ajouté", icon="✅")
+                        st.rerun()
 
-    # --- Recherche et affichage ---
+    # ============================================================
+    # 🔍 RECHERCHE ET AFFICHAGE
+    # ============================================================
+    st.divider()
     search = st.text_input("🔍 Rechercher un client", placeholder="Nom ou email")
     query = session.query(Client).filter_by(entreprise_id=ent_id)
     if search:
-        query = query.filter(Client.nom.contains(search) | Client.email.contains(search))
+        query = query.filter(
+            Client.nom.contains(search) | Client.email.contains(search)
+        )
     clients = query.all()
 
+    st.write(f"**Total :** {len(clients)} client(s)")
+
     if not clients:
-        st.info("Aucun client")
+        st.info("Aucun client trouvé")
     else:
-        # Affichage avec boutons d'action (suppression réservée aux admins)
-        data = [{"ID": c.id, "Nom": c.nom, "Téléphone": c.telephone or "", "Email": c.email or ""} for c in clients]
-        df = pd.DataFrame(data)
-        st.data_editor(df, key="clients_editor", use_container_width=True, hide_index=True,
-                        column_config={"ID": st.column_config.NumberColumn("ID", width="small")},
-                        num_rows="dynamic", disabled=not est_admin())
-        # Boutons de suppression seulement si admin
-        if est_admin():
-            for c in clients:
-                col1, col2, col3, col4, col5 = st.columns([3,3,3,1,1])
-                with col1:
-                    st.write(f"**{c.nom}**")
-                with col2:
-                    st.write(c.telephone or "—")
-                with col3:
-                    st.write(c.email or "—")
-                with col4:
-                    if st.button("✏️", key=f"edit_{c.id}"):
-                        st.info(f"Modification de {c.nom} – à venir")
-                with col5:
-                    if st.button("🗑️", key=f"del_{c.id}"):
+        for c in clients:
+            col1, col2, col3, col4 = st.columns([3, 3, 3, 1])
+            with col1:
+                st.write(f"**{c.nom}**")
+            with col2:
+                st.write(c.telephone or "—")
+            with col3:
+                st.write(c.email or "—")
+            with col4:
+                if est_admin():
+                    if st.button("🗑️", key=f"del_client_{c.id}"):
                         session.delete(c)
                         session.commit()
                         st.toast(f"Client {c.nom} supprimé", icon="🗑️")
                         st.rerun()
-        else:
-            # Affichage simple pour les employés
-            st.dataframe(df.drop(columns=["ID"]))
 
-    # --- Export Excel ---
-    if st.button("📤 Exporter les clients en Excel", use_container_width=True):
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name="Clients")
-        st.download_button(
-            label="Télécharger le fichier",
-            data=output.getvalue(),
-            file_name=f"clients_{date.today()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+    # ============================================================
+    # 📤 EXPORTER LES CLIENTS EN EXCEL ET CSV
+    # ============================================================
+    if clients:
+        st.divider()
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📤 Exporter en Excel", use_container_width=True):
+                data = [{"Nom": c.nom, "Téléphone": c.telephone or "", "Email": c.email or ""} for c in clients]
+                df_export = pd.DataFrame(data)
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name="Clients")
+                st.download_button(
+                    label="Télécharger .xlsx",
+                    data=output.getvalue(),
+                    file_name=f"clients_{date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        with col2:
+            if st.button("📤 Exporter en CSV", use_container_width=True):
+                data = [{"Nom": c.nom, "Téléphone": c.telephone or "", "Email": c.email or ""} for c in clients]
+                df_export = pd.DataFrame(data)
+                csv = df_export.to_csv(index=False, encoding='utf-8')
+                st.download_button(
+                    label="Télécharger .csv",
+                    data=csv,
+                    file_name=f"clients_{date.today()}.csv",
+                    mime="text/csv"
+                )
 
     session.close()
+#jusqu ici#########################################
 
 def gestion_rendezvous():
     apply_theme()
