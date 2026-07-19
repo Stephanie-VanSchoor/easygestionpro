@@ -426,6 +426,9 @@ def gestion_clients():
 # ============================================================
 # 📂 IMPORTER DES CLIENTS (CSV, Excel, ODS, etc.)
 # ============================================================
+# ============================================================
+# 📂 IMPORTER DES CLIENTS (CSV, Excel, ODS, ...)
+# ============================================================
 uploaded_file = st.file_uploader(
     "Choisissez votre fichier",
     type=None,  # accepte toutes les extensions
@@ -436,7 +439,7 @@ if uploaded_file is not None:
     df_import = None
     detected_format = ""
 
-    # 1️⃣ Essayer la lecture avec pandas (auto-détection Excel / ODS)
+    # 1️⃣ Essayer la lecture avec pandas (Excel / ODS)
     #    On tente plusieurs moteurs pour maximiser la compatibilité
     methods = [
         ("Excel (auto)", lambda: pd.read_excel(uploaded_file)),
