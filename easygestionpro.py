@@ -720,135 +720,161 @@ def gestion_rendezvous():
                         st.rerun()
     session.close()
 
-def gestion_factures():
+def gestion_clients():
     apply_theme()
-    st.title("🧾 Factures")
+    st.title("👥 Clients")
     ent_id = st.session_state.entreprise_id
     session = get_session()
 
-    # --- Ajout facture ---
-    with st.expander("➕ Créer une facture", expanded=False):
-        with st.form("add_facture"):
-            client_nom = st.text_input("Client *")
-            montant = st.number_input("Montant (€) *", min_value=0.0, step=0.01)
-            statut = st.selectbox("Statut", ["En attente", "Payée", "Annulée"])
-            echeance = st.date_input("Date d'échéance", value=date.today() + timedelta(days=30))
-            send_email_fact = st.checkbox("Envoyer la facture par email au client")
-            submitted = st.form_submit_button("Créer")
-            if submitted:
-                if not client_nom or montant <= 0:
-                    st.error("Client et montant valide requis.")
-                else:
-                    facture = Facture(
-                        entreprise_id=ent_id,
-                        client_nom=client_nom,
-                        montant=montant,
-                        statut=statut,
-                        date_echeance=echeance
-                    )
-                    session.add(facture)
-                    session.commit()
-                    st.toast("✅ Facture créée", icon="✅")
-                    # Envoi email si demandé
-                    if send_email_fact:
-                        client = session.query(Client).filter_by(entreprise_id=ent_id, nom=client_nom).first()
-                        if client and client.email:
-                            subject = f"Facture {facture.id} - {client_nom}"
-                            body = f"Bonjour {client_nom},\n\nVotre facture n°{facture.id} d'un montant de {montant} € est disponible.\nStatut : {statut}\nÉchéance : {echeance.strftime('%d/%m/%Y')}\n\nCordialement,\nEasyGestion Pro"
-                            if send_email(client.email, subject, body):
-                                st.success("📧 Facture envoyée par email !")
-                            else:
-                                st.warning("Échec de l'envoi de l'email.")
+    # ============================================================
+    # 📋 IMPORTER PAR COPIE-COLLER (LA SOLUTION QUI MARCHE)
+    # ============================================================
+    with st.expander("📋 Importer par copier-coller (infaillible)", expanded=True):
+        st.markdown("""
+        **Instructions :**
+        1. Ouvre ton fichier avec LibreOffice Calc.
+        2. Sélectionne **toutes les cellules** (Ctrl+A).
+        3. Copie (Ctrl+C).
+        4. Colle (Ctrl+V) dans la zone ci-dessous.
+        """)
+        
+        pasted_text = st.text_area(
+            "Colle ici les données de ton fichier (une ligne par client)",
+            height=200,
+            placeholder="Nom    Téléphone    Email\nDupont Jean    0612345678    jean.dupont@email.com"
+        )
+        
+        if pasted_text:
+            if st.button("📥 Importer les clients", use_container_width=True, type="primary"):
+                with st.spinner("Importation..."):
+                    lines = pasted_text.strip().split('\n')
+                    count = 0
+                    errors = 0
+                    
+                    # Détecter le séparateur (tabulation, virgule, point-virgule)
+                    for line in lines[:5]:  # tester sur les 5 premières lignes
+                        if '\t' in line:
+                            sep = '\t'
+                            break
+                        elif ',' in line:
+                            sep = ','
+                            break
+                        elif ';' in line:
+                            sep = ';'
+                            break
                         else:
-                            st.warning("Aucun email trouvé pour ce client.")
+                            sep = None
+                    
+                    if sep is None:
+                        st.error("Impossible de détecter le séparateur. Utilise tabulation, virgule ou point-virgule.")
+                    else:
+                        for i, line in enumerate(lines):
+                            if not line.strip():
+                                continue
+                            parts = line.split(sep)
+                            if len(parts) >= 3:
+                                nom = parts[0].strip()
+                                tel = parts[1].strip() if len(parts) > 1 else ""
+                                email = parts[2].strip() if len(parts) > 2 else ""
+                                
+                                if i == 0 and nom.lower() in ["nom", "name"]:
+                                    continue  # sauter l'en-tête
+                                
+                                if nom and nom.lower() not in ["nom", "name"]:
+                                    existant = session.query(Client).filter_by(
+                                        entreprise_id=ent_id,
+                                        nom=nom
+                                    ).first()
+                                    if not existant:
+                                        client = Client(
+                                            entreprise_id=ent_id,
+                                            nom=nom,
+                                            telephone=tel if tel else None,
+                                            email=email if email else None
+                                        )
+                                        session.add(client)
+                                        count += 1
+                                    else:
+                                        errors += 1
+                            else:
+                                errors += 1
+                        
+                        session.commit()
+                        if count > 0:
+                            st.success(f"✅ {count} clients importés !")
+                            if errors > 0:
+                                st.warning(f"⚠️ {errors} lignes ignorées (doublons ou format incorrect)")
+                            st.rerun()
+                        else:
+                            st.error("Aucun client importé. Vérifie le format (Nom, Téléphone, Email)")
+
+    # ============================================================
+    # ➕ AJOUTER UN CLIENT (manuel)
+    # ============================================================
+    with st.expander("➕ Ajouter un client (manuel)", expanded=False):
+        with st.form("add_client"):
+            nom = st.text_input("Nom *")
+            tel = st.text_input("Téléphone")
+            email = st.text_input("Email")
+            submitted = st.form_submit_button("Ajouter", use_container_width=True)
+            if submitted:
+                if not nom:
+                    st.error("Le nom est requis.")
+                else:
+                    client = Client(entreprise_id=ent_id, nom=nom, telephone=tel, email=email)
+                    session.add(client)
+                    session.commit()
+                    st.toast("✅ Client ajouté", icon="✅")
                     st.rerun()
 
-    # --- Filtres ---
-    col1, col2 = st.columns(2)
-    with col1:
-        statut_filter = st.selectbox("Statut", ["Tous", "En attente", "Payée", "Annulée"])
-    with col2:
-        search_fact = st.text_input("Rechercher un client")
+    # ============================================================
+    # 🔍 RECHERCHE ET AFFICHAGE
+    # ============================================================
+    st.divider()
+    search = st.text_input("🔍 Rechercher un client", placeholder="Nom ou email")
+    query = session.query(Client).filter_by(entreprise_id=ent_id)
+    if search:
+        query = query.filter(Client.nom.contains(search) | Client.email.contains(search))
+    clients = query.all()
 
-    query = session.query(Facture).filter_by(entreprise_id=ent_id)
-    if statut_filter != "Tous":
-        query = query.filter(Facture.statut == statut_filter)
-    if search_fact:
-        query = query.filter(Facture.client_nom.contains(search_fact))
-    factures = query.all()
+    st.write(f"**Total :** {len(clients)} client(s)")
 
-    if not factures:
-        st.info("Aucune facture")
+    if not clients:
+        st.info("Aucun client trouvé")
     else:
-        for f in factures:
-            col1, col2, col3, col4, col5, col6, col7 = st.columns([2,1.5,1.5,1.5,1.5,1,1])
+        for c in clients:
+            col1, col2, col3, col4 = st.columns([3, 3, 3, 1])
             with col1:
-                st.write(f"👤 **{f.client_nom}**")
+                st.write(f"**{c.nom}**")
             with col2:
-                st.write(f"💰 {f.montant:.2f} €")
+                st.write(c.telephone or "—")
             with col3:
-                if f.statut == "Payée":
-                    st.success("✅ Payée")
-                elif f.statut == "En attente":
-                    st.warning("⏳ En attente")
-                else:
-                    st.error("❌ Annulée")
+                st.write(c.email or "—")
             with col4:
-                st.write(f"📅 {f.date_emission.strftime('%d/%m/%Y')}")
-            with col5:
-                if f.date_echeance:
-                    st.write(f"⏰ {f.date_echeance.strftime('%d/%m/%Y')}")
-            with col6:
-                # Bouton PDF (inchangé)
-                if st.button("📄", key=f"pdf_{f.id}"):
-                    pdf = FPDF()
-                    pdf.add_page()
-                    pdf.set_font("Arial", size=12)
-                    pdf.cell(200, 10, txt=f"Facture {f.id}", ln=True, align='C')
-                    pdf.cell(200, 10, txt=f"Client: {f.client_nom}", ln=True)
-                    pdf.cell(200, 10, txt=f"Montant: {f.montant} €", ln=True)
-                    pdf.cell(200, 10, txt=f"Statut: {f.statut}", ln=True)
-                    pdf.cell(200, 10, txt=f"Date: {f.date_emission.strftime('%d/%m/%Y')}", ln=True)
-                    pdf_output = io.BytesIO()
-                    pdf.output(pdf_output)
-                    st.download_button(
-                        label="Télécharger PDF",
-                        data=pdf_output.getvalue(),
-                        file_name=f"facture_{f.id}.pdf",
-                        mime="application/pdf",
-                        key=f"dl_{f.id}"
-                    )
-            with col7:
                 if est_admin():
-                    if st.button("🗑️", key=f"del_fact_{f.id}"):
-                        session.delete(f)
+                    if st.button("🗑️", key=f"del_client_{c.id}"):
+                        session.delete(c)
                         session.commit()
-                        st.toast(f"Facture de {f.client_nom} supprimée", icon="🗑️")
+                        st.toast(f"Client {c.nom} supprimé", icon="🗑️")
                         st.rerun()
 
-    # --- Export Excel ---
-    if factures:
-        if st.button("📤 Exporter les factures en Excel"):
-            df_fact = pd.DataFrame([{
-                "ID": f.id,
-                "Client": f.client_nom,
-                "Montant": f.montant,
-                "Statut": f.statut,
-                "Date émission": f.date_emission,
-                "Échéance": f.date_echeance
-            } for f in factures])
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                df_fact.to_excel(writer, index=False, sheet_name="Factures")
+    # ============================================================
+    # 📤 EXPORTER
+    # ============================================================
+    if clients:
+        st.divider()
+        if st.button("📤 Exporter les clients en CSV", use_container_width=True):
+            data = [{"Nom": c.nom, "Téléphone": c.telephone or "", "Email": c.email or ""} for c in clients]
+            df_export = pd.DataFrame(data)
+            csv = df_export.to_csv(index=False, encoding='utf-8', sep=';')  # séparateur point-virgule pour Excel
             st.download_button(
-                label="Télécharger le fichier",
-                data=output.getvalue(),
-                file_name=f"factures_{date.today()}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                label="Télécharger .csv",
+                data=csv,
+                file_name=f"clients_{date.today()}.csv",
+                mime="text/csv"
             )
 
     session.close()
-
 # ============================================================
 # SIDEBAR (avec thème et rôle)
 # ============================================================
