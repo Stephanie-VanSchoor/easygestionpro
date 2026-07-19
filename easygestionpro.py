@@ -264,7 +264,7 @@ def page_connexion():
 # ============================================================
 def est_admin():
     return st.session_state.user_role == "admin"
-
+###a changer
 def dashboard():
     apply_theme()
     st.title("📊 Tableau de bord")
@@ -307,24 +307,26 @@ def dashboard():
             </div>
         """, unsafe_allow_html=True)
 
-    # Graphique RDV
+    # Graphique RDV (corrigé)
     if nb_rdv > 0:
         rdvs = session.query(RendezVous).filter_by(entreprise_id=ent_id).all()
         df_rdv = pd.DataFrame([(r.date, 1) for r in rdvs], columns=["date", "count"])
         df_rdv["mois"] = pd.to_datetime(df_rdv["date"]).dt.to_period("M").astype(str)
+        # ✅ CORRECTION ICI
         df_rdv = df_rdv.groupby("mois", as_index=False)["count"].sum()
         if not df_rdv.empty:
-            fig = px.bar(df_rdv, x="mois", y="count", title="Rendez-vous par mois", color_discrete_sequence=["#3B82F6"])
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-                              font_color="#1E293B" if st.session_state.theme=="clair" else "#CDD6F4")
-            st.plotly_chart(fig, use_container_width=True)
+            fig1 = px.bar(df_rdv, x="mois", y="count", title="Rendez-vous par mois", color_discrete_sequence=["#3B82F6"])
+            fig1.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+                               font_color="#1E293B" if st.session_state.theme=="clair" else "#CDD6F4")
+            st.plotly_chart(fig1, use_container_width=True)
 
-    # Graphique CA
+    # Graphique CA (corrigé)
     if factures:
         df_ca = pd.DataFrame([(f.date_emission, f.montant, f.statut) for f in factures],
                              columns=["date", "montant", "statut"])
         if not df_ca.empty:
             df_ca["mois"] = pd.to_datetime(df_ca["date"]).dt.to_period("M").astype(str)
+            # ✅ CORRECTION ICI
             df_ca_group = df_ca.groupby(["mois", "statut"], as_index=False)["montant"].sum()
             fig2 = px.bar(df_ca_group, x="mois", y="montant", color="statut",
                           title="CA par mois et statut",
