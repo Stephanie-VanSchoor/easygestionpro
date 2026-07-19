@@ -423,97 +423,137 @@ def gestion_clients():
     # 📂 IMPORTER DES CLIENTS (CSV, Excel, ODS)
     # ============================================================
    # Dans gestion_clients(), remplace la section upload par :
-
+# ============================================================
+# 📂 IMPORTER DES CLIENTS (CSV, Excel, ODS, etc.)
+# ============================================================
 uploaded_file = st.file_uploader(
     "Choisissez votre fichier",
-    type=None,  # ← ACCEPTE TOUS LES TYPES
+    type=None,  # accepte toutes les extensions
     key="import_clients"
 )
 
 if uploaded_file is not None:
-    # Essaie de deviner le format
-    try:
-        # D'abord, essayer de lire avec pandas en détectant automatiquement
-        import magic  # optionnel, mais pas nécessaire
-        # On va tenter plusieurs lectures
-        df_import = None
-        errors = []
-        
-        # Essayer openpyxl (xlsx)
+    df_import = None
+    detected_format = ""
+
+    # 1️⃣ Essayer la lecture avec pandas (auto-détection Excel / ODS)
+    #    On tente plusieurs moteurs pour maximiser la compatibilité
+    methods = [
+        ("Excel (auto)", lambda: pd.read_excel(uploaded_file)),
+        ("Excel (openpyxl)", lambda: pd.read_excel(uploaded_file, engine='openpyxl')),
+        ("Excel (xlrd)", lambda: pd.read_excel(uploaded_file, engine='xlrd')),
+        ("Excel (odf)", lambda: pd.read_excel(uploaded_file, engine='odf')),
+    ]
+
+    for name, func in methods:
         try:
-            df_import = pd.read_excel(uploaded_file, engine='openpyxl')
-            st.info("📄 Format détecté : Excel XLSX")
-        except:
-            uploaded_file.seek(0)
-            try:
-                df_import = pd.read_excel(uploaded_file, engine='xlrd')
-                st.info("📄 Format détecté : Excel XLS ancien")
-            except:
-                uploaded_file.seek(0)
+            uploaded_file.seek(0)  # remettre le curseur au début
+            df_import = func()
+            detected_format = name
+            st.info(f"📄 Format détecté : {name}")
+            break
+        except Exception:
+            continue
+
+    # 2️⃣ Si aucun moteur Excel n'a fonctionné, on essaie en CSV
+    if df_import is None:
+        uploaded_file.seek(0)
+        try:
+            # Lire le contenu pour détecter séparateur et encodage
+            raw = uploaded_file.read()
+            # Essayer plusieurs encodages
+            for enc in ['utf-8', 'latin1', 'cp1252']:
                 try:
-                    df_import = pd.read_excel(uploaded_file, engine='odf')
-                    st.info("📄 Format détecté : ODS")
-                except:
+                    content = raw.decode(enc)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            else:
+                content = raw.decode('utf-8', errors='ignore')
+            uploaded_file.seek(0)
+
+            # Détection du séparateur
+            if ',' in content and ';' in content:
+                sep = ',' if content.count(',') > content.count(';') else ';'
+            elif ',' in content:
+                sep = ','
+            elif ';' in content:
+                sep = ';'
+            else:
+                sep = None
+
+            # Lecture CSV avec le séparateur trouvé
+            if sep:
+                for enc in ['utf-8', 'latin1', 'cp1252']:
                     uploaded_file.seek(0)
                     try:
-                        # Essayer CSV avec différents séparateurs
-                        content = uploaded_file.read().decode('utf-8', errors='ignore')
-                        uploaded_file.seek(0)
-                        if ',' in content and ';' in content:
-                            sep = ',' if content.count(',') > content.count(';') else ';'
-                        elif ',' in content:
-                            sep = ','
-                        elif ';' in content:
-                            sep = ';'
-                        else:
-                            sep = None
-                        if sep:
-                            df_import = pd.read_csv(uploaded_file, encoding='utf-8', sep=sep)
-                            st.info(f"📄 Format détecté : CSV (séparateur '{sep}')")
-                        else:
-                            raise ValueError("Séparateur non trouvé")
-                    except:
-                        uploaded_file.seek(0)
-                        st.error("❌ Impossible de lire ce fichier. Vérifie qu'il contient des colonnes Nom, Téléphone, Email.")
-                        df_import = None
-        
-        if df_import is not None and not df_import.empty:
-            # Nettoyage
-            df_import.columns = df_import.columns.str.strip()
+                        df_import = pd.read_csv(uploaded_file, encoding=enc, sep=sep)
+                        detected_format = f"CSV (séparateur '{sep}', encodage {enc})"
+                        st.info(f"📄 Format détecté : {detected_format}")
+                        break
+                    except Exception:
+                        continue
+        except Exception as e:
+            st.error(f"❌ Erreur de lecture : {e}")
+
+    # 3️⃣ Si la lecture a réussi, on traite les données
+    if df_import is not None and not df_import.empty:
+        # Nettoyer les noms de colonnes : minuscules, sans accents, sans espaces
+        def clean_col(name):
+            import unicodedata
+            name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
+            return name.strip().lower().replace(' ', '')
+
+        df_import.columns = [clean_col(col) for col in df_import.columns]
+
+        # Mapping des noms attendus
+        col_mapping = {
+            'nom': 'Nom',
+            'telephone': 'Téléphone',
+            'email': 'Email'
+        }
+        # Vérifier qu'on a au moins la colonne 'nom'
+        if 'nom' in df_import.columns:
+            # Renommer les colonnes si elles existent
+            df_import.rename(columns=col_mapping, inplace=True)
+            # S'assurer que les colonnes requises sont présentes (au moins Nom)
             required = ["Nom", "Téléphone", "Email"]
-            if all(col in df_import.columns for col in required):
-                st.write("**Aperçu :**")
-                st.dataframe(df_import.head(10))
-                if st.button("✅ Importer ces clients", use_container_width=True):
-                    with st.spinner("Import..."):
-                        count = 0
-                        for _, row in df_import.iterrows():
-                            nom = str(row["Nom"]).strip()
-                            tel = str(row["Téléphone"]).strip()
-                            email = str(row["Email"]).strip()
-                            if nom and nom != "nan":
-                                existant = session.query(Client).filter_by(
+            missing = [c for c in required if c not in df_import.columns]
+            if missing:
+                st.warning(f"Colonnes manquantes : {missing}. Seul 'Nom' est obligatoire.")
+            # Afficher un aperçu
+            st.write("**Aperçu des données :**")
+            st.dataframe(df_import.head(10))
+
+            if st.button("✅ Importer ces clients", use_container_width=True):
+                with st.spinner("Importation en cours..."):
+                    count = 0
+                    for _, row in df_import.iterrows():
+                        nom = str(row.get("Nom", "")).strip()
+                        if nom and nom != "nan":
+                            tel = str(row.get("Téléphone", "")).strip()
+                            email = str(row.get("Email", "")).strip()
+                            # Vérifier si le client existe déjà
+                            existant = session.query(Client).filter_by(
+                                entreprise_id=ent_id,
+                                nom=nom
+                            ).first()
+                            if not existant:
+                                client = Client(
                                     entreprise_id=ent_id,
-                                    nom=nom
-                                ).first()
-                                if not existant:
-                                    client = Client(
-                                        entreprise_id=ent_id,
-                                        nom=nom,
-                                        telephone=tel if tel != "nan" else None,
-                                        email=email if email != "nan" else None
-                                    )
-                                    session.add(client)
-                                    count += 1
-                        session.commit()
-                        st.success(f"✅ {count} clients importés !")
-                        st.rerun()
-            else:
-                st.error(f"Colonnes requises : {required}. Trouvées : {list(df_import.columns)}")
+                                    nom=nom,
+                                    telephone=tel if tel and tel != "nan" else None,
+                                    email=email if email and email != "nan" else None
+                                )
+                                session.add(client)
+                                count += 1
+                    session.commit()
+                    st.success(f"✅ {count} clients importés avec succès !")
+                    st.rerun()
         else:
-            st.error("Le fichier est vide ou non lisible.")
-    except Exception as e:
-        st.error(f"Erreur : {e}")
+            st.error("❌ Le fichier doit contenir une colonne 'Nom' (ou 'nom').")
+    else:
+        st.error("❌ Le fichier est vide ou illisible.")
     # ============================================================
     # ➕ AJOUTER UN CLIENT (manuel)
     # ============================================================
