@@ -1,15 +1,18 @@
-# =======================================================
-# easygestionpro.py  –  Version améliorée
-# =======================================================
+# ============================================================
+# EasyGestion Pro – Version Professionnelle
+# ============================================================
 
 import streamlit as st
 from datetime import datetime, date, timedelta
 import pandas as pd
 import plotly.express as px
 import bcrypt
+from fpdf import FPDF
+import base64
+import io
 
 from sqlalchemy import create_engine, Column, Integer, String, Float, Date, Time, ForeignKey, DateTime
-from sqlalchemy.orm import sessionmaker, declarative_base, relationship, joinedload
+from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from sqlalchemy.exc import IntegrityError
 
 # ---------- Configuration de la page ----------
@@ -26,13 +29,12 @@ engine = create_engine(f"sqlite:///{DB_NAME}", echo=False)
 SessionLocal = sessionmaker(bind=engine)
 Base = declarative_base()
 
-# ---------- Modèles ----------
+# ---------- Modèles (inchangés) ----------
 class Entreprise(Base):
     __tablename__ = "entreprises"
     id = Column(Integer, primary_key=True)
     nom = Column(String, nullable=False)
     date_creation = Column(DateTime, default=datetime.now)
-
     utilisateurs = relationship("Utilisateur", back_populates="entreprise")
     clients = relationship("Client", back_populates="entreprise")
     rendezvous = relationship("RendezVous", back_populates="entreprise")
@@ -46,7 +48,6 @@ class Utilisateur(Base):
     email = Column(String, unique=True, nullable=False)
     mot_de_passe_hash = Column(String, nullable=False)
     date_creation = Column(DateTime, default=datetime.now)
-
     entreprise = relationship("Entreprise", back_populates="utilisateurs")
 
 class Client(Base):
@@ -57,18 +58,16 @@ class Client(Base):
     telephone = Column(String)
     email = Column(String)
     date_creation = Column(DateTime, default=datetime.now)
-
     entreprise = relationship("Entreprise", back_populates="clients")
 
 class RendezVous(Base):
     __tablename__ = "rendezvous"
     id = Column(Integer, primary_key=True)
     entreprise_id = Column(Integer, ForeignKey("entreprises.id"), nullable=False)
-    client_nom = Column(String, nullable=False)   # On stocke le nom pour simplifier
+    client_nom = Column(String, nullable=False)
     date = Column(Date, nullable=False)
     heure = Column(Time, nullable=False)
     date_creation = Column(DateTime, default=datetime.now)
-
     entreprise = relationship("Entreprise", back_populates="rendezvous")
 
 class Facture(Base):
@@ -77,13 +76,11 @@ class Facture(Base):
     entreprise_id = Column(Integer, ForeignKey("entreprises.id"), nullable=False)
     client_nom = Column(String, nullable=False)
     montant = Column(Float, nullable=False)
-    statut = Column(String, default="En attente")  # En attente, Payée, Annulée
+    statut = Column(String, default="En attente")
     date_emission = Column(DateTime, default=datetime.now)
-    date_echeance = Column(Date)   # Optionnel
-
+    date_echeance = Column(Date)
     entreprise = relationship("Entreprise", back_populates="factures")
 
-# ---------- Création des tables ----------
 Base.metadata.create_all(engine)
 
 # ---------- Fonctions utilitaires ----------
@@ -96,14 +93,13 @@ def hash_password(pw: str) -> str:
 def verify_password(pw: str, hashed: str) -> bool:
     return bcrypt.checkpw(pw.encode(), hashed.encode())
 
-# ---------- Initialisation : création d'un compte admin par défaut si vide ----------
+# ---------- Initialisation démo ----------
 def init_demo_company():
     session = get_session()
     if session.query(Entreprise).count() == 0:
-        # Créer une entreprise de démonstration
         entreprise = Entreprise(nom="EasyGestion Demo")
         session.add(entreprise)
-        session.flush()  # pour avoir l'id
+        session.flush()
         admin = Utilisateur(
             entreprise_id=entreprise.id,
             nom="Administrateur",
@@ -116,7 +112,7 @@ def init_demo_company():
 
 init_demo_company()
 
-# ---------- Gestion de session Streamlit ----------
+# ---------- Gestion de session ----------
 if "connecte" not in st.session_state:
     st.session_state.connecte = False
 if "entreprise_id" not in st.session_state:
@@ -124,77 +120,124 @@ if "entreprise_id" not in st.session_state:
 if "user_nom" not in st.session_state:
     st.session_state.user_nom = ""
 
-# =======================================================
+# ============================================================
 # AUTHENTIFICATION
-# =======================================================
+# ============================================================
 def page_connexion():
-    st.title("🔐 EasyGestion Pro – Connexion")
-    choix = st.radio("Choisir", ["Connexion", "Créer mon entreprise"])
+    st.markdown("""
+        <style>
+        .big-title { font-size: 48px; font-weight: 700; color: #1E88E5; text-align: center; }
+        .sub-title { font-size: 20px; text-align: center; color: #64748B; margin-bottom: 30px; }
+        .login-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.05); max-width: 500px; margin: auto; }
+        </style>
+    """, unsafe_allow_html=True)
 
-    if choix == "Connexion":
-        email = st.text_input("Email")
-        password = st.text_input("Mot de passe", type="password")
-        if st.button("Se connecter", type="primary"):
-            session = get_session()
-            utilisateur = session.query(Utilisateur).filter_by(email=email).first()
-            session.close()
-            if utilisateur and verify_password(password, utilisateur.mot_de_passe_hash):
-                st.session_state.connecte = True
-                st.session_state.entreprise_id = utilisateur.entreprise_id
-                st.session_state.user_nom = utilisateur.nom
-                st.rerun()
-            else:
-                st.error("Identifiants incorrects")
+    st.markdown('<div class="big-title">📋 EasyGestion Pro</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-title">La solution de gestion pour les pros</div>', unsafe_allow_html=True)
 
-    else:  # Création
-        with st.form("create_company"):
-            entreprise = st.text_input("Nom de l'entreprise")
-            nom = st.text_input("Votre nom")
-            email = st.text_input("Email")
-            password = st.text_input("Mot de passe", type="password")
-            submitted = st.form_submit_button("Créer mon entreprise")
-            if submitted:
-                if not (entreprise and nom and email and password):
-                    st.error("Tous les champs sont obligatoires")
-                else:
+    choix = st.radio("Choisir", ["Connexion", "Créer mon entreprise"], horizontal=True)
+
+    with st.container():
+        if choix == "Connexion":
+            with st.form("login_form"):
+                email = st.text_input("Email", placeholder="votre@email.com")
+                password = st.text_input("Mot de passe", type="password", placeholder="••••••••")
+                submitted = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
+                if submitted:
                     session = get_session()
-                    # Vérifier si l'email existe déjà
-                    if session.query(Utilisateur).filter_by(email=email).first():
-                        st.error("Cet email est déjà utilisé.")
-                    else:
-                        new_entreprise = Entreprise(nom=entreprise)
-                        session.add(new_entreprise)
-                        session.flush()
-                        new_user = Utilisateur(
-                            entreprise_id=new_entreprise.id,
-                            nom=nom,
-                            email=email,
-                            mot_de_passe_hash=hash_password(password)
-                        )
-                        session.add(new_user)
-                        session.commit()
-                        st.success("Entreprise créée ! Connectez-vous.")
-                        st.rerun()
+                    user = session.query(Utilisateur).filter_by(email=email).first()
                     session.close()
+                    if user and verify_password(password, user.mot_de_passe_hash):
+                        st.session_state.connecte = True
+                        st.session_state.entreprise_id = user.entreprise_id
+                        st.session_state.user_nom = user.nom
+                        st.toast("Bienvenue ! 🎉", icon="👋")
+                        st.rerun()
+                    else:
+                        st.error("❌ Identifiants incorrects")
+        else:
+            with st.form("create_form"):
+                entreprise = st.text_input("Nom de l'entreprise")
+                nom = st.text_input("Votre nom")
+                email = st.text_input("Email")
+                password = st.text_input("Mot de passe", type="password")
+                submitted = st.form_submit_button("Créer mon entreprise", use_container_width=True)
+                if submitted:
+                    if not (entreprise and nom and email and password):
+                        st.error("Tous les champs sont obligatoires.")
+                    else:
+                        session = get_session()
+                        if session.query(Utilisateur).filter_by(email=email).first():
+                            st.error("Cet email est déjà utilisé.")
+                        else:
+                            new_ent = Entreprise(nom=entreprise)
+                            session.add(new_ent)
+                            session.flush()
+                            new_user = Utilisateur(
+                                entreprise_id=new_ent.id,
+                                nom=nom,
+                                email=email,
+                                mot_de_passe_hash=hash_password(password)
+                            )
+                            session.add(new_user)
+                            session.commit()
+                            st.success("✅ Entreprise créée ! Vous pouvez vous connecter.")
+                            st.balloons()
+                        session.close()
 
-# =======================================================
-# PAGES PRINCIPALES
-# =======================================================
+# ============================================================
+# PAGES PRINCIPALES (stylisées)
+# ============================================================
+
 def dashboard():
+    st.markdown("""
+        <style>
+        .metric-card { background: white; border-radius: 12px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: center; border-left: 5px solid #1E88E5; }
+        .metric-value { font-size: 32px; font-weight: 700; color: #1E293B; }
+        .metric-label { font-size: 14px; color: #64748B; }
+        .stat-badge { background: #E2E8F0; border-radius: 20px; padding: 4px 12px; font-size: 12px; }
+        </style>
+    """, unsafe_allow_html=True)
+
     st.title("📊 Tableau de bord")
     ent_id = st.session_state.entreprise_id
     session = get_session()
 
-    # Compteurs
     nb_clients = session.query(Client).filter_by(entreprise_id=ent_id).count()
     nb_rdv = session.query(RendezVous).filter_by(entreprise_id=ent_id).count()
     factures = session.query(Facture).filter_by(entreprise_id=ent_id).all()
     ca = sum(f.montant for f in factures if f.statut == "Payée")
+    ca_attente = sum(f.montant for f in factures if f.statut == "En attente")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("👥 Clients", nb_clients)
-    col2.metric("📅 Rendez-vous", nb_rdv)
-    col3.metric("💰 Chiffre d'affaires (payé)", f"{ca:.2f} €")
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.markdown(f"""
+            <div class="metric-card" style="border-left-color: #3B82F6;">
+                <div class="metric-value">{nb_clients}</div>
+                <div class="metric-label">👥 Clients</div>
+            </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+            <div class="metric-card" style="border-left-color: #8B5CF6;">
+                <div class="metric-value">{nb_rdv}</div>
+                <div class="metric-label">📅 Rendez-vous</div>
+            </div>
+        """, unsafe_allow_html=True)
+    with col3:
+        st.markdown(f"""
+            <div class="metric-card" style="border-left-color: #10B981;">
+                <div class="metric-value">{ca:.2f} €</div>
+                <div class="metric-label">💰 Chiffre d'affaires (payé)</div>
+            </div>
+        """, unsafe_allow_html=True)
+    with col4:
+        st.markdown(f"""
+            <div class="metric-card" style="border-left-color: #F59E0B;">
+                <div class="metric-value">{ca_attente:.2f} €</div>
+                <div class="metric-label">⏳ En attente de paiement</div>
+            </div>
+        """, unsafe_allow_html=True)
 
     # Graphiques
     if nb_rdv > 0:
@@ -203,17 +246,19 @@ def dashboard():
         df_rdv["mois"] = pd.to_datetime(df_rdv["date"]).dt.to_period("M").astype(str)
         df_rdv = df_rdv.groupby("mois").sum().reset_index()
         if not df_rdv.empty:
-            fig1 = px.bar(df_rdv, x="mois", y="count", title="Rendez-vous par mois")
+            fig1 = px.bar(df_rdv, x="mois", y="count", title="Rendez-vous par mois", color_discrete_sequence=["#3B82F6"])
+            fig1.update_layout(plot_bgcolor="white", paper_bgcolor="white", font_color="#1E293B")
             st.plotly_chart(fig1, use_container_width=True)
 
-    if ca > 0:
-        # CA par mois
-        df_ca = pd.DataFrame([(f.date_emission, f.montant) for f in factures if f.statut == "Payée"],
-                             columns=["date", "montant"])
+    if ca > 0 or ca_attente > 0:
+        df_ca = pd.DataFrame([(f.date_emission, f.montant, f.statut) for f in factures],
+                             columns=["date", "montant", "statut"])
         if not df_ca.empty:
             df_ca["mois"] = pd.to_datetime(df_ca["date"]).dt.to_period("M").astype(str)
-            df_ca = df_ca.groupby("mois").sum().reset_index()
-            fig2 = px.line(df_ca, x="mois", y="montant", title="CA mensuel (€)")
+            df_ca_group = df_ca.groupby(["mois", "statut"]).sum().reset_index()
+            fig2 = px.bar(df_ca_group, x="mois", y="montant", color="statut", title="CA par mois et statut",
+                          color_discrete_map={"Payée": "#10B981", "En attente": "#F59E0B", "Annulée": "#EF4444"})
+            fig2.update_layout(plot_bgcolor="white", paper_bgcolor="white", font_color="#1E293B")
             st.plotly_chart(fig2, use_container_width=True)
 
     session.close()
@@ -223,24 +268,22 @@ def gestion_clients():
     ent_id = st.session_state.entreprise_id
     session = get_session()
 
-    # Formulaire d'ajout
     with st.expander("➕ Ajouter un client", expanded=False):
         with st.form("add_client"):
             nom = st.text_input("Nom *")
             tel = st.text_input("Téléphone")
             email = st.text_input("Email")
-            submitted = st.form_submit_button("Ajouter")
+            submitted = st.form_submit_button("Ajouter", use_container_width=True)
             if submitted:
                 if not nom:
-                    st.error("Le nom est obligatoire")
+                    st.error("Le nom est requis.")
                 else:
                     client = Client(entreprise_id=ent_id, nom=nom, telephone=tel, email=email)
                     session.add(client)
                     session.commit()
-                    st.toast("Client ajouté ✅", icon="✅")
+                    st.toast("✅ Client ajouté", icon="✅")
                     st.rerun()
 
-    # Recherche
     search = st.text_input("🔍 Rechercher un client", placeholder="Nom ou email")
     query = session.query(Client).filter_by(entreprise_id=ent_id)
     if search:
@@ -250,25 +293,31 @@ def gestion_clients():
     if not clients:
         st.info("Aucun client")
     else:
-        # Affichage avec data_editor pour modification inline
-        data = [{"ID": c.id, "Nom": c.nom, "Téléphone": c.telephone, "Email": c.email} for c in clients]
+        # Tableau stylisé avec data_editor
+        data = [{"ID": c.id, "Nom": c.nom, "Téléphone": c.telephone or "", "Email": c.email or ""} for c in clients]
         df = pd.DataFrame(data)
-        edited = st.data_editor(df, key="clients_editor", use_container_width=True, num_rows="dynamic")
-        # Détecter les modifications
-        # Pour simplifier, on ajoute des boutons de suppression
+        edited = st.data_editor(df, key="clients_editor", use_container_width=True, hide_index=True,
+                                column_config={"ID": st.column_config.NumberColumn("ID", width="small")},
+                                num_rows="dynamic")
+        # Gestion des suppressions
         for c in clients:
-            col1, col2 = st.columns([10, 1])
+            col1, col2, col3, col4, col5 = st.columns([3,3,3,1,1])
             with col1:
-                st.write(f"{c.nom}  |  {c.telephone}  |  {c.email}")
+                st.write(f"**{c.nom}**")
             with col2:
-                if st.button("🗑️", key=f"del_client_{c.id}"):
+                st.write(c.telephone or "—")
+            with col3:
+                st.write(c.email or "—")
+            with col4:
+                if st.button("✏️", key=f"edit_{c.id}"):
+                    # Pour simplifier, on ouvre un modal (ici on pourrait utiliser un expander)
+                    st.info(f"Modification de {c.nom} – fonctionnalité à venir")
+            with col5:
+                if st.button("🗑️", key=f"del_{c.id}"):
                     session.delete(c)
                     session.commit()
                     st.toast(f"Client {c.nom} supprimé", icon="🗑️")
                     st.rerun()
-
-        # Mise à jour en masse (si l'utilisateur modifie via l'éditeur, on peut enregistrer)
-        # Ici on ne gère pas pour éviter la complexité, mais on pourrait.
     session.close()
 
 def gestion_rendezvous():
@@ -281,18 +330,17 @@ def gestion_rendezvous():
             client_nom = st.text_input("Nom du client *")
             date_rdv = st.date_input("Date", value=date.today())
             heure_rdv = st.time_input("Heure", value=datetime.now().time())
-            submitted = st.form_submit_button("Ajouter")
+            submitted = st.form_submit_button("Ajouter", use_container_width=True)
             if submitted:
                 if not client_nom:
-                    st.error("Le nom est obligatoire")
+                    st.error("Nom requis.")
                 else:
                     rdv = RendezVous(entreprise_id=ent_id, client_nom=client_nom, date=date_rdv, heure=heure_rdv)
                     session.add(rdv)
                     session.commit()
-                    st.toast("Rendez-vous ajouté ✅", icon="✅")
+                    st.toast("✅ Rendez-vous ajouté", icon="✅")
                     st.rerun()
 
-    # Filtres
     col1, col2 = st.columns(2)
     with col1:
         date_filter = st.date_input("Filtrer par date", value=None)
@@ -310,9 +358,9 @@ def gestion_rendezvous():
         st.info("Aucun rendez-vous")
     else:
         for rdv in rdvs:
-            col1, col2, col3, col4 = st.columns([3,2,2,1])
+            col1, col2, col3, col4 = st.columns([2,2,2,1])
             with col1:
-                st.write(f"👤 {rdv.client_nom}")
+                st.write(f"👤 **{rdv.client_nom}**")
             with col2:
                 st.write(f"📅 {rdv.date.strftime('%d/%m/%Y')}")
             with col3:
@@ -336,10 +384,10 @@ def gestion_factures():
             montant = st.number_input("Montant (€) *", min_value=0.0, step=0.01)
             statut = st.selectbox("Statut", ["En attente", "Payée", "Annulée"])
             echeance = st.date_input("Date d'échéance", value=date.today() + timedelta(days=30))
-            submitted = st.form_submit_button("Créer")
+            submitted = st.form_submit_button("Créer", use_container_width=True)
             if submitted:
                 if not client_nom or montant <= 0:
-                    st.error("Client et montant valide requis")
+                    st.error("Client et montant valide requis.")
                 else:
                     facture = Facture(
                         entreprise_id=ent_id,
@@ -350,10 +398,9 @@ def gestion_factures():
                     )
                     session.add(facture)
                     session.commit()
-                    st.toast("Facture créée ✅", icon="✅")
+                    st.toast("✅ Facture créée", icon="✅")
                     st.rerun()
 
-    # Filtres
     col1, col2 = st.columns(2)
     with col1:
         statut_filter = st.selectbox("Statut", ["Tous", "En attente", "Payée", "Annulée"])
@@ -371,19 +418,43 @@ def gestion_factures():
         st.info("Aucune facture")
     else:
         for f in factures:
-            col1, col2, col3, col4, col5, col6 = st.columns([2,1.5,1,1,1,0.8])
+            col1, col2, col3, col4, col5, col6 = st.columns([2,1.5,1.5,1.5,1.5,1])
             with col1:
-                st.write(f"👤 {f.client_nom}")
+                st.write(f"👤 **{f.client_nom}**")
             with col2:
-                st.write(f"{f.montant:.2f} €")
+                st.write(f"💰 {f.montant:.2f} €")
             with col3:
-                st.write(f"{f.statut}")
+                if f.statut == "Payée":
+                    st.success("✅ Payée")
+                elif f.statut == "En attente":
+                    st.warning("⏳ En attente")
+                else:
+                    st.error("❌ Annulée")
             with col4:
-                st.write(f"{f.date_emission.strftime('%d/%m/%Y')}")
+                st.write(f"📅 {f.date_emission.strftime('%d/%m/%Y')}")
             with col5:
                 if f.date_echeance:
-                    st.write(f"Échéance: {f.date_echeance.strftime('%d/%m/%Y')}")
+                    st.write(f"⏰ {f.date_echeance.strftime('%d/%m/%Y')}")
             with col6:
+                if st.button("📄", key=f"pdf_{f.id}"):
+                    # Génération PDF (simplifiée)
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_font("Arial", size=12)
+                    pdf.cell(200, 10, txt=f"Facture {f.id}", ln=True, align='C')
+                    pdf.cell(200, 10, txt=f"Client: {f.client_nom}", ln=True)
+                    pdf.cell(200, 10, txt=f"Montant: {f.montant} €", ln=True)
+                    pdf.cell(200, 10, txt=f"Statut: {f.statut}", ln=True)
+                    pdf.cell(200, 10, txt=f"Date: {f.date_emission.strftime('%d/%m/%Y')}", ln=True)
+                    pdf_output = io.BytesIO()
+                    pdf.output(pdf_output)
+                    st.download_button(
+                        label="Télécharger PDF",
+                        data=pdf_output.getvalue(),
+                        file_name=f"facture_{f.id}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_{f.id}"
+                    )
                 if st.button("🗑️", key=f"del_fact_{f.id}"):
                     session.delete(f)
                     session.commit()
@@ -391,30 +462,53 @@ def gestion_factures():
                     st.rerun()
     session.close()
 
-# =======================================================
-# APP PRINCIPALE
-# =======================================================
+# ============================================================
+# SIDEBAR STYLISÉE
+# ============================================================
+def sidebar():
+    with st.sidebar:
+        st.markdown("""
+            <style>
+                .sidebar-title { font-size: 22px; font-weight: 700; color: #1E88E5; }
+                .user-info { background: #F1F5F9; padding: 15px; border-radius: 12px; text-align: center; }
+                .user-avatar { font-size: 48px; }
+            </style>
+        """, unsafe_allow_html=True)
+
+        st.markdown('<div class="sidebar-title">📋 EasyGestion Pro</div>', unsafe_allow_html=True)
+        st.markdown(f"""
+            <div class="user-info">
+                <div class="user-avatar">👤</div>
+                <div style="font-weight:600;">{st.session_state.user_nom}</div>
+                <div style="font-size:12px;color:#64748B;">Entreprise ID: {st.session_state.entreprise_id}</div>
+            </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("🚪 Déconnexion", use_container_width=True):
+            st.session_state.connecte = False
+            st.session_state.entreprise_id = None
+            st.session_state.user_nom = ""
+            st.rerun()
+
+        st.divider()
+        menu = st.radio(
+            "Navigation",
+            ["🏠 Tableau de bord", "👥 Clients", "📅 Rendez-vous", "🧾 Factures"],
+            index=0,
+            key="menu"
+        )
+        return menu
+
+# ============================================================
+# MAIN
+# ============================================================
 def main():
     if not st.session_state.connecte:
         page_connexion()
         return
 
-    # Barre latérale
-    st.sidebar.title("📋 EasyGestion Pro")
-    st.sidebar.write(f"👋 Bienvenue, {st.session_state.user_nom}")
-    if st.sidebar.button("Déconnexion", use_container_width=True):
-        st.session_state.connecte = False
-        st.session_state.entreprise_id = None
-        st.session_state.user_nom = ""
-        st.rerun()
+    menu = sidebar()
 
-    menu = st.sidebar.radio(
-        "Navigation",
-        ["🏠 Tableau de bord", "👥 Clients", "📅 Rendez-vous", "🧾 Factures"],
-        index=0
-    )
-
-    # Pages
     if menu == "🏠 Tableau de bord":
         dashboard()
     elif menu == "👥 Clients":
@@ -424,5 +518,15 @@ def main():
     elif menu == "🧾 Factures":
         gestion_factures()
 
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align: center; color: #94A3B8; font-size: 12px;'>"
+        "© 2025 EasyGestion Pro – Tous droits réservés"
+        "</div>",
+        unsafe_allow_html=True
+    )
+
 if __name__ == "__main__":
     main()
+ 
